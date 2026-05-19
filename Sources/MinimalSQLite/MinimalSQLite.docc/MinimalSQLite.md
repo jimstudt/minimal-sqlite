@@ -1,48 +1,78 @@
 # MinimalSQLite
 
-Use SQLite from Swift with a small async API for connections, statements, values, and transactions.
+Use SQLite from Swift with a small async API for connections, statements, values, and read-only or read-write transactions.
 
 ## Overview
 
-MinimalSQLite is a lightweight wrapper around SQLite's C API. It keeps the SQLite handle in a ``SQLDatabase`` actor, then exposes async methods for running SQL, binding Swift values, decoding rows, and grouping work in transactions.
+MinimalSQLite is a lightweight wrapper around SQLite's C API. It keeps SQLite handles behind a ``SQLDatabase`` actor, then exposes async methods for running SQL, binding Swift values, decoding rows, and grouping work in transactions.
 
-The package is intentionally close to SQLite. You still write SQL directly, choose your schema, and decide which queries to run. MinimalSQLite handles the repetitive glue: opening and closing the database, preparing statements, binding parameters, stepping through rows, converting SQLite values into Swift types, and serializing access to the underlying connection.
+The package is intentionally close to SQLite. You still write SQL directly, choose your schema, and decide which queries to run. MinimalSQLite handles the repetitive glue: opening and closing the database, preparing statements, binding parameters, stepping through rows, converting SQLite values into Swift types, and lending connections to one operation at a time.
 
 ### Opening a Database
-Create one ``SQLDatabase`` actor for each SQLite database connection you want to use. Pass a file URL for an on-disk database, or pass `nil` for an in-memory database.
+
+Create one ``SQLDatabase`` actor for each SQLite database you want to use. Pass a file URL for an on-disk database, or pass `nil` for a shared in-memory database.
 
 ```swift
 let database = try SQLDatabase(at: databaseURL)
 let memoryDatabase = try SQLDatabase(at: nil)
 ```
 
-A database actor owns one SQLite connection. Its operations are asynchronous, but SQLite work is run one operation at a time on the connection's internal queue so the underlying handle is not used concurrently.
+A database owns one writer connection and a pool of reader connections. Writer work uses the writer connection, and read-only work uses a reader connection. Foreign-key enforcement is enabled by default on all connections.
 
-When you are finished with a connection, call ``SQLDatabase/close()`` to release the SQLite handle before the actor is deallocated.
+When you are finished with a database, call ``SQLDatabase/close()`` to release the SQLite handles before the actor is deallocated.
 
-### Running SQL
+### Transactions First
 
-Use ``SQLDatabase/execute(_:)`` for SQL that does not need bound parameters or returned rows, such as schema setup.
+Use ``SQLDatabase/readwrite(_:)`` when work may modify the database. The block receives a ``WriteTransaction``, which exposes both query APIs and `execute` APIs.
 
 ```swift
-try await database.execute("""
-    CREATE TABLE users (
-        id INTEGER PRIMARY KEY,
-        name TEXT NOT NULL,
-        age INTEGER
+try await database.readwrite { transaction in
+    try await transaction.execute("""
+        CREATE TABLE users (
+            id INTEGER PRIMARY KEY,
+            name TEXT NOT NULL,
+            age INTEGER
+        )
+        """)
+
+    try await transaction.execute(
+        "INSERT INTO users (name, age) VALUES (?, ?)",
+        "Ana",
+        42
     )
-    """)
+}
 ```
 
-For SQL that includes user data, use a parameterized `execute` overload and write `?` placeholders in the SQL. MinimalSQLite binds each Swift value to the matching placeholder.
+Use ``SQLDatabase/readonly(_:)`` when work should only read. The block receives a ``ReadTransaction``, which exposes query APIs but not `execute` APIs, so accidental writes are rejected at compile time.
+
+```swift
+let users: [(Int, String)] = try await database.readonly { transaction in
+    try await transaction.query(
+        "SELECT id, name FROM users WHERE age >= ? ORDER BY name",
+        bind: 18
+    )
+}
+```
+
+If a transaction block throws, MinimalSQLite rolls the transaction back and rethrows the error. SQLite `BUSY` and `LOCKED` errors are retried by rerunning the transaction block, so transaction blocks should avoid non-idempotent side effects outside SQLite.
+
+### Convenience Statements
+
+For simple one-off work, ``SQLDatabase`` also provides direct statement methods. These are convenience wrappers: `execute` runs in a one-off read-write transaction, while `lookup`, `query`, and `queryDict` run in one-off read-only transactions.
 
 ```swift
 try await database.execute(
     "INSERT INTO users (name, age) VALUES (?, ?)",
-    "Ana",
-    42
+    "Sam",
+    30
+)
+
+let rows: [(Int, String)] = try await database.query(
+    "SELECT id, name FROM users ORDER BY name"
 )
 ```
+
+Prefer explicit ``SQLDatabase/readwrite(_:)`` or ``SQLDatabase/readonly(_:)`` blocks when several statements should share one transaction or when you want the transaction boundary to be obvious.
 
 ### Reading Rows
 
@@ -68,8 +98,7 @@ Use ``SQLDatabase/queryDict(_:bind:)`` when the selected columns are dynamic or 
 
 ```swift
 let rows = try await database.queryDict(
-    "SELECT id, name, age FROM users ORDER BY name",
-    bind: []
+    "SELECT id, name, age FROM users ORDER BY name"
 )
 ```
 
@@ -81,38 +110,22 @@ MinimalSQLite provides built-in support for common Swift types, including `Int64
 
 ```swift
 let rows: [(Int, String, Date?)] = try await database.query(
-    "SELECT id, name, last_seen FROM users",
-    parameters: []
+    "SELECT id, name, last_seen FROM users"
 )
 ```
-
-### Transactions
-
-Use ``SQLDatabase/transaction(_:_:)`` to run a group of database operations atomically. If the transaction block completes successfully, MinimalSQLite commits the transaction. If the block throws, MinimalSQLite rolls the transaction back and rethrows the error.
-
-```swift
-try await database.transaction(.immediate) {
-    try await database.execute(
-        "INSERT INTO users (name, age) VALUES (?, ?)",
-        "Sam",
-        30
-    )
-
-    try await database.execute(
-        "INSERT INTO users (name, age) VALUES (?, ?)",
-        "Lee",
-        31
-    )
-}
-```
-
-SQLite `BUSY` and `LOCKED` errors are retried by rerunning the transaction block, so transaction blocks should avoid non-idempotent side effects outside SQLite.
 
 ## Topics
 
 ### Connections
 
 - ``SQLDatabase``
+
+### Transactions
+
+- ``ReadTransaction``
+- ``WriteTransaction``
+- ``SQLDatabase/readonly(_:)``
+- ``SQLDatabase/readwrite(_:)``
 
 ### Statements
 
@@ -122,13 +135,7 @@ SQLite `BUSY` and `LOCKED` errors are retried by rerunning the transaction block
 - ``SQLDatabase/query(_:parameters:)``
 - ``SQLDatabase/queryDict(_:bind:)``
 
-### Transactions
-
-- ``SQLDatabase/TransactionMode``
-- ``SQLDatabase/transaction(_:_:)``
-
 ### Values
 
 - ``SQLDatabase/Value``
 - ``Null``
-

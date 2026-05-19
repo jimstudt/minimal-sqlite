@@ -10,21 +10,40 @@ import SQLite3
 
 private let SQLITE_TRANSIENT = unsafeBitCast(-1, to: sqlite3_destructor_type.self)
 
-/// An actor that owns a single SQLite database connection.
+private func pragma(_ handle: OpaquePointer, _ statement: String) throws {
+    let rc = sqlite3_exec(handle, statement, nil, nil, nil)
+    guard rc == SQLITE_OK else {
+        let message = String(cString: sqlite3_errmsg(handle))
+        throw MinimalSQLite.SQLDatabase.Error.sqlite3Error(rc, message)
+    }
+}
+
+/// An actor that owns SQLite database handles.
 ///
-/// `SQLDatabase` serializes all SQLite work through an internal queue so the
-/// underlying `sqlite3` handle is only used by one operation at a time. Create
-/// one database actor for each SQLite database you want to work with, then call
-/// the package's async APIs on that actor to create tables, run statements,
-/// and read rows.
+/// `SQLDatabase` keeps a writer handle and optional readonly reader handles.
+/// Create one database actor for each SQLite database you want to work with,
+/// then call the package's async APIs on that actor to create tables, run
+/// statements, and read rows.
 ///
 /// Pass a file URL to open an on-disk database, or pass `nil` to create a
-/// temporary in-memory database that exists only for the lifetime of the
-/// connection.
+/// temporary shared-cache in-memory database that exists only while its handles
+/// remain open.
 public actor SQLDatabase {
-    private let sqlQueue: DispatchQueue
-    nonisolated(unsafe) var db: OpaquePointer?
+    struct Connection: Hashable, @unchecked Sendable {
+        let handle: OpaquePointer
 
+        static func == (lhs: Connection, rhs: Connection) -> Bool {
+            lhs.handle == rhs.handle
+        }
+
+        func hash(into hasher: inout Hasher) {
+            hasher.combine(UInt(bitPattern: handle))
+        }
+    }
+
+    let writerPool: AsyncTokenPool<Connection>
+    let readerPool: AsyncTokenPool<Connection>
+    
     /// Errors thrown by SQLite connection, statement, and row-reading operations.
     enum Error : Swift.Error {
         /// A database open operation was requested while a handle was already open.
@@ -43,15 +62,16 @@ public actor SQLDatabase {
         case stepFailed(String)
         /// A query expected exactly one row but returned a different number of rows.
         case rowNotUnique
+        case databaseClosed
     }
     
 
     /// Opens a SQLite database connection.
     ///
     /// Use this initializer to create either a file-backed database or an
-    /// in-memory database. File-backed databases are opened with
-    /// `sqlite3_open_v2`; in-memory databases are opened with SQLite's
-    /// `:memory:` database name.
+    /// in-memory database. File-backed databases are opened with their file
+    /// path. In-memory databases are opened with a generated SQLite URI so the
+    /// writer and reader handles can share the same temporary database.
     ///
     /// ```swift
     /// let database = try SQLDatabase(at: databaseURL)
@@ -66,69 +86,102 @@ public actor SQLDatabase {
     ///     when `url` is `nil`.
     ///   - readOnly: Pass `true` to open an existing file-backed database
     ///     without write permission.
+    ///   - readers: The number of readonly reader handles to open.
+    ///   - foreignKeys: Pass `true` to enable SQLite foreign-key enforcement on
+    ///     every writer and reader connection.
     /// - Throws: `SQLDatabase.Error.sqlite3Error` if SQLite cannot open the
-    ///   database.
-    public init(at url: URL?, canCreate: Bool = true, readOnly: Bool = false) throws {
-        self.sqlQueue = DispatchQueue(label: "com.lunarware.minimalsqlite.queue", qos: .default)
-
-        var handle: OpaquePointer?
-        let rc: Int32
+    ///   database, configure its pragmas, or open one of its readonly reader
+    ///   handles.
+    public init(at url: URL?, canCreate: Bool = true, readOnly: Bool = false, readers: Int = 4, foreignKeys: Bool = true) throws {
+        let databaseName: String
+        let writerFlags: Int32
+        let readerFlags: Int32
         if let url {
-            let flags: Int32
+            databaseName = url.path
             if readOnly {
-                flags = SQLITE_OPEN_READONLY
+                writerFlags = SQLITE_OPEN_READONLY
             } else {
-                flags = SQLITE_OPEN_READWRITE | (canCreate ? SQLITE_OPEN_CREATE : 0)
+                writerFlags = SQLITE_OPEN_READWRITE | (canCreate ? SQLITE_OPEN_CREATE : 0)
             }
-            rc = url.path.withCString { cPath in
-                sqlite3_open_v2(cPath, &handle, flags, nil)
-            }
+            readerFlags = SQLITE_OPEN_READONLY
         } else {
-            // Open an in-memory database when URL is nil
-            rc = sqlite3_open(":memory:", &handle)
+            databaseName = "file:minimal-sqlite-\(UUID().uuidString)?mode=memory&cache=shared"
+            writerFlags = SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE | SQLITE_OPEN_URI
+            readerFlags = SQLITE_OPEN_READONLY | SQLITE_OPEN_URI
         }
 
-        guard rc == SQLITE_OK, let handle else {
+        var writerHandle: OpaquePointer?
+        let writerRC = databaseName.withCString { cPath in
+            sqlite3_open_v2(cPath, &writerHandle, writerFlags, nil)
+        }
+
+        guard writerRC == SQLITE_OK, let writerHandle else {
             let msg: String
-            if let handle {
-                msg = String(cString: sqlite3_errmsg(handle))
-                sqlite3_close(handle)
+            if let writerHandle {
+                msg = String(cString: sqlite3_errmsg(writerHandle))
+                sqlite3_close(writerHandle)
             } else {
                 msg = "unable to open database"
             }
-            throw Error.sqlite3Error(rc, msg)
+            throw Error.sqlite3Error(writerRC, msg)
         }
-        self.db = handle
+
+        var readerHandles: [OpaquePointer] = []
+        do {
+            if foreignKeys { try pragma(writerHandle, "PRAGMA foreign_keys = ON;") }
+            try pragma(writerHandle, "PRAGMA synchronous = NORMAL")
+
+            for _ in 0..<max(0, readers) {
+                var readerHandle: OpaquePointer?
+                let readerRC = databaseName.withCString { cPath in
+                    sqlite3_open_v2(cPath, &readerHandle, readerFlags, nil)
+                }
+
+                guard readerRC == SQLITE_OK, let readerHandle else {
+                    let msg: String
+                    if let readerHandle {
+                        msg = String(cString: sqlite3_errmsg(readerHandle))
+                        sqlite3_close(readerHandle)
+                    } else {
+                        msg = "unable to open readonly database handle"
+                    }
+                    throw Error.sqlite3Error(readerRC, msg)
+                }
+
+                do {
+                    if foreignKeys { try pragma(readerHandle, "PRAGMA foreign_keys = ON;") }
+                    try pragma(readerHandle, "PRAGMA query_only = ON;")
+                } catch {
+                    sqlite3_close(readerHandle)
+                    throw error
+                }
+
+                readerHandles.append(readerHandle)
+            }
+        } catch {
+            sqlite3_close(writerHandle)
+            for readerHandle in readerHandles {
+                sqlite3_close(readerHandle)
+            }
+            throw error
+        }
+
+        self.writerPool = AsyncTokenPool([Connection(handle: writerHandle)])
+        self.readerPool = AsyncTokenPool(Set(readerHandles.map { Connection(handle: $0) }))
     }
 
     deinit {
-        // If our database is still open, then wait for the queue clear and do a close.
-        if db != nil {
-            _ = sqlQueue.sync {
-                sqlite3_close(self.db)
+        // This is kind of an emergency bandaid, you really should have closed it first.
+        Task { [writerPool, readerPool] in
+            for t in await writerPool.removeAllTokens() {
+                sqlite3_close(t.handle)
+            }
+            for t in await readerPool.removeAllTokens() {
+                sqlite3_close(t.handle)
             }
         }
     }
     
-    /// Runs synchronous SQLite work on the connection's serial queue.
-    ///
-    /// SQLite's C API is blocking and uses the connection handle directly. This
-    /// helper bridges that synchronous work into async package APIs while
-    /// preserving one-at-a-time access to the handle.
-    @discardableResult
-    func sqlTask<T>(_ work: @Sendable @escaping () throws -> T) async throws -> T {
-        try await withCheckedThrowingContinuation { continuation in
-            sqlQueue.async {
-                do {
-                    let result = try work()
-                    continuation.resume(returning: result)
-                } catch {
-                    continuation.resume(throwing: error)
-                }
-            }
-        }
-    }
-
     /// Closes the SQLite database connection.
     ///
     /// Call `close()` when you want to release the SQLite handle before the
@@ -138,15 +191,121 @@ public actor SQLDatabase {
     /// After a connection is closed, create a new `SQLDatabase` instance before
     /// running more SQL.
     public func close() async throws {
-        if db == nil { return }
-        
-        try await sqlTask {
-            sqlite3_close(self.db)
+        for t in await writerPool.removeAllTokens() {
+            sqlite3_close(t.handle)
         }
-        self.db = nil
+        for t in await readerPool.removeAllTokens() {
+            sqlite3_close(t.handle)
+        }
     }
 
     
+    /// Runs write-capable database work inside an immediate SQLite transaction.
+    ///
+    /// The transaction begins before `block` runs. If the block completes
+    /// successfully, the transaction is committed and the block's return value
+    /// is returned. If the block throws, the transaction is rolled back and the
+    /// error is rethrown.
+    ///
+    /// SQLite `BUSY` and `LOCKED` errors are treated as retryable. When one of
+    /// those errors is thrown as `SQLDatabase.Error.sqlite3Error`, the current
+    /// transaction is rolled back and the entire transaction block is run again.
+    /// For that reason, the block should be safe to retry. Keep side effects
+    /// that are outside SQLite, such as network requests or file writes, out of
+    /// the block or make them idempotent.
+    ///
+    /// ```swift
+    /// let status = try await database.readwrite { transaction in
+    ///     try await transaction.execute(
+    ///         "INSERT INTO users (name) VALUES (?)",
+    ///         "Blob"
+    ///     )
+    ///     return "inserted"
+    /// }
+    /// ```
+    ///
+    /// - Parameter block: The async work to run while the transaction is active.
+    /// - Returns: The value returned by `block` after a successful commit.
+    /// - Throws: The error thrown by `block`, or an error thrown while beginning,
+    ///   committing, rolling back, or retrying the transaction.
+    public func readwrite<T: Sendable>(_ block: @Sendable ( WriteTransaction) async throws -> T) async throws -> T {
+        try await writerPool.with { connection in
+            let tx = WriteTransaction(connection: connection)
+            
+            while true {
+                try await tx.begin(mode: .immediate)
+                do {
+                    let result = try await block(tx)
+                    try await tx.commit()
+                    return result
+                } catch let Error.sqlite3Error(code, message) {
+                    // Always attempt rollback on error
+                    try? await tx.rollback()
+                    // Check primary result code for retryable lock conditions
+                    let primary = code & 0xFF
+                    if primary == SQLITE_BUSY || primary == SQLITE_LOCKED {
+                        // Retry the transaction
+                        continue
+                    } else {
+                        // Non-retryable SQLite error
+                        throw Error.sqlite3Error(code, message)
+                    }
+                } catch {
+                    // Non-SQLite error: rollback and rethrow
+                    try? await tx.rollback()
+                    throw error
+                }
+            }
+        }
+    }
     
+    /// Runs read-only database work inside a deferred SQLite transaction.
+    ///
+    /// The block receives a `ReadTransaction`, which exposes query APIs but not
+    /// write APIs. SQLite `BUSY` and `LOCKED` errors are treated as retryable in
+    /// the same way as `readwrite(_:)`.
+    ///
+    /// ```swift
+    /// let users: [(Int, String)] = try await database.readonly { transaction in
+    ///     try await transaction.query(
+    ///         "SELECT id, name FROM users ORDER BY name"
+    ///     )
+    /// }
+    /// ```
+    ///
+    /// - Parameter block: The async work to run while the transaction is active.
+    /// - Returns: The value returned by `block` after a successful commit.
+    /// - Throws: The error thrown by `block`, or an error thrown while beginning,
+    ///   committing, rolling back, or retrying the transaction.
+    public func readonly<T: Sendable>(_ block: @Sendable ( ReadTransaction) async throws -> T) async throws -> T {
+        try await readerPool.with { connection in
+            let tx = ReadTransaction(connection: connection)
+            while true {
+                try await tx.begin(mode: .deferred)
+                do {
+                    let result = try await block(tx)
+                    try await tx.commit()
+                    return result
+                } catch let Error.sqlite3Error(code, message) {
+                    // Always attempt rollback on error
+                    try? await tx.rollback()
+                    // Check primary result code for retryable lock conditions
+                    let primary = code & 0xFF
+                    if primary == SQLITE_BUSY || primary == SQLITE_LOCKED {
+                        // Retry the transaction
+                        continue
+                    } else {
+                        // Non-retryable SQLite error
+                        throw Error.sqlite3Error(code, message)
+                    }
+                } catch {
+                    // Non-SQLite error: rollback and rethrow
+                    try? await tx.rollback()
+                    throw error
+                }
+            }
+        }
+    }
+
 }
 

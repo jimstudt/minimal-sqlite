@@ -90,11 +90,11 @@ struct CreateSQLDatabaseTests {
     func transactionInserts() async throws {
         let db = try MinimalSQLite.SQLDatabase(at: nil)
 
-        await #expect(throws: Never.self) {
+       await #expect(throws: Never.self) {
             try await db.execute(schema)
-            let status = try await db.transaction {
-                try await db.execute("insert into names (first, last) values (?, ?)", parameters: ["Ford", "Prefect"])
-                try await db.execute("insert into names (first, last) values (?, ?)", parameters: ["Tricia", "McMillan"])
+            let status = try await db.readwrite { tx in
+                try await tx.execute("insert into names (first, last) values (?, ?)", parameters: ["Ford", "Prefect"])
+                try await tx.execute("insert into names (first, last) values (?, ?)", parameters: ["Tricia", "McMillan"])
                 return "great!"
             }
             #expect(status == "great!")

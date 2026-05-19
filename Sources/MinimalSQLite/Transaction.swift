@@ -19,7 +19,7 @@ enum TransactionBeginMode: Sendable {
     }
 }
 
-protocol SQLTransactionActor: Actor {
+public protocol Transaction: Actor {
     var connection: MinimalSQLite.SQLDatabase.Connection { get }
 }
 
@@ -28,8 +28,8 @@ protocol SQLTransactionActor: Actor {
 /// `ReadTransaction` exposes query APIs but intentionally does not expose
 /// `execute` APIs, so writes are rejected at compile time in read-only
 /// transactions.
-public actor ReadTransaction: SQLTransactionActor {
-    let connection: MinimalSQLite.SQLDatabase.Connection
+public actor ReadTransaction: Transaction {
+    public let connection: MinimalSQLite.SQLDatabase.Connection
 
     init(connection: MinimalSQLite.SQLDatabase.Connection) {
         self.connection = connection
@@ -41,8 +41,8 @@ public actor ReadTransaction: SQLTransactionActor {
 /// `WriteTransaction` exposes both query APIs and `execute` APIs. Use this type
 /// inside `SQLDatabase.readwrite(_:)` when a unit of work needs to modify the
 /// database.
-public actor WriteTransaction: SQLTransactionActor {
-    let connection: MinimalSQLite.SQLDatabase.Connection
+public actor WriteTransaction: Transaction {
+    public let connection: MinimalSQLite.SQLDatabase.Connection
 
     init(connection: MinimalSQLite.SQLDatabase.Connection) {
         self.connection = connection

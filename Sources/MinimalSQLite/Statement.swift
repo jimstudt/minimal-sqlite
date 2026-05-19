@@ -292,7 +292,7 @@ extension WriteTransaction {
 }
 
 
-extension SQLTransactionActor {
+extension Transaction {
     public typealias Value = MinimalSQLite.SQLDatabase.Value
     typealias DatabaseError = MinimalSQLite.SQLDatabase.Error
 

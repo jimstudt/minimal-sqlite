@@ -10,9 +10,16 @@ let package = Package(
         .library(name: "MinimalSQLite", targets: ["MinimalSQLite"])
     ],
     targets: [
+        .systemLibrary(
+            name: "CSQLite3",
+            pkgConfig: "sqlite3",
+            providers: [
+                .apt(["libsqlite3-dev"])
+            ]
+        ),
         .target(
             name: "MinimalSQLite",
-            dependencies: []
+            dependencies: ["CSQLite3"]
         ),
         .testTarget(
             name: "MinimalSQLiteTests",

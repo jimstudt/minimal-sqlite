@@ -10,11 +10,22 @@ import SQLite3
 
 private let SQLITE_TRANSIENT = unsafeBitCast(-1, to: sqlite3_destructor_type.self)
 
+func throwSQLiteError(code: Int32, message: String) throws -> Never {
+    let primary = code & 0xFF
+    if primary == SQLITE_BUSY || primary == SQLITE_LOCKED {
+        throw MinimalSQLite.SQLDatabase.Error.transactionLocked(message)
+    }
+    throw MinimalSQLite.SQLDatabase.Error.sqlite3Error(code, message)
+}
+
+func throwSQLiteError(code: Int32, handle: OpaquePointer) throws -> Never {
+    try throwSQLiteError(code: code, message: String(cString: sqlite3_errmsg(handle)))
+}
+
 private func pragma(_ handle: OpaquePointer, _ statement: String) throws {
     let rc = sqlite3_exec(handle, statement, nil, nil, nil)
     guard rc == SQLITE_OK else {
-        let message = String(cString: sqlite3_errmsg(handle))
-        throw MinimalSQLite.SQLDatabase.Error.sqlite3Error(rc, message)
+        try throwSQLiteError(code: rc, handle: handle)
     }
 }
 
@@ -29,14 +40,14 @@ private func pragma(_ handle: OpaquePointer, _ statement: String) throws {
 /// temporary shared-cache in-memory database that exists only while its handles
 /// remain open.
 public actor SQLDatabase {
-    public struct Connection: Hashable, @unchecked Sendable {
+    struct Connection: Hashable, @unchecked Sendable {
         let handle: OpaquePointer
 
-        public static func == (lhs: Connection, rhs: Connection) -> Bool {
+        static func == (lhs: Connection, rhs: Connection) -> Bool {
             lhs.handle == rhs.handle
         }
 
-        public func hash(into hasher: inout Hasher) {
+        func hash(into hasher: inout Hasher) {
             hasher.combine(UInt(bitPattern: handle))
         }
     }
@@ -58,6 +69,8 @@ public actor SQLDatabase {
         case readFailed(String)
         /// SQLite could not compile the SQL string into a prepared statement.
         case prepareFailed(String, sql: String)
+        /// SQLite could not advance a statement because the transaction was locked.
+        case transactionLocked(String)
         /// SQLite failed while advancing or executing a statement.
         case stepFailed(String)
         /// A query expected exactly one row but returned a different number of rows.
@@ -123,7 +136,7 @@ public actor SQLDatabase {
             } else {
                 msg = "unable to open database"
             }
-            throw Error.sqlite3Error(writerRC, msg)
+            try throwSQLiteError(code: writerRC, message: msg)
         }
 
         var readerHandles: [OpaquePointer] = []
@@ -145,7 +158,7 @@ public actor SQLDatabase {
                     } else {
                         msg = "unable to open readonly database handle"
                     }
-                    throw Error.sqlite3Error(readerRC, msg)
+                    try throwSQLiteError(code: readerRC, message: msg)
                 }
 
                 do {
@@ -238,6 +251,9 @@ public actor SQLDatabase {
                     let result = try await block(tx)
                     try await tx.commit()
                     return result
+                } catch Error.transactionLocked(_) {
+                    try? await tx.rollback()
+                    continue
                 } catch let Error.sqlite3Error(code, message) {
                     // Always attempt rollback on error
                     try? await tx.rollback()
@@ -286,6 +302,9 @@ public actor SQLDatabase {
                     let result = try await block(tx)
                     try await tx.commit()
                     return result
+                } catch Error.transactionLocked(_) {
+                    try? await tx.rollback()
+                    continue
                 } catch let Error.sqlite3Error(code, message) {
                     // Always attempt rollback on error
                     try? await tx.rollback()

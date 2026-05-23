@@ -5,6 +5,7 @@
 //  Created by Jim Studt on 2/18/26.
 //
 
+import Foundation
 import Testing
 @testable import MinimalSQLite
 
@@ -123,6 +124,62 @@ struct CreateSQLDatabaseTests {
         }
 
         await #expect(throws: Never.self) {
+            try await db.close()
+        }
+    }
+
+    @Test("Reader sees old value during open writer transaction")
+    func readerSeesOldValueDuringOpenWriterTransaction() async throws {
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent("minimal-sqlite-lock-\(UUID().uuidString).sqlite")
+        defer { try? FileManager.default.removeItem(at: url) }
+
+        let db = try MinimalSQLite.SQLDatabase(at: url)
+
+        await #expect(throws: Never.self) {
+            try await db.execute("""
+                create table lock_test (
+                    id INTEGER PRIMARY KEY,
+                    value TEXT NOT NULL
+                ) STRICT;
+                """)
+            try await db.execute(
+                "insert into lock_test (id, value) values (?, ?)",
+                1,
+                "old"
+            )
+
+            async let writer: Void = db.readwrite { tx in
+                try await tx.execute(
+                    "update lock_test set value = ? where id = ?",
+                    "new",
+                    1
+                )
+                try await Task.sleep(for: .seconds(1))
+            }
+
+            async let readerValue: String? = {
+                try await Task.sleep(for: .milliseconds(500))
+                return try await db.readonly { tx -> String? in
+                    let row: (String)? = try await tx.lookup(
+                        "select value from lock_test where id = ?",
+                        parameters: [1]
+                    )
+                    return row
+                }
+            }()
+
+            let valueDuringWrite = try await readerValue
+            #expect(valueDuringWrite == "old")
+
+            try await writer
+
+            let valueAfterCommit: (String)? = try await db.lookup(
+                "select value from lock_test where id = ?",
+                parameters: [1]
+            )
+            #expect(valueAfterCommit == "new")
+
             try await db.close()
         }
     }

@@ -23,8 +23,9 @@ struct Statement {
     /// Prepares SQL text for execution on the given SQLite connection.
     init(db: OpaquePointer, sql: String) throws {
         var s: OpaquePointer?
-        if sqlite3_prepare_v2(db, sql, -1, &s, nil) != SQLITE_OK {
-            throw DatabaseError.prepareFailed(String(cString: sqlite3_errmsg(db)), sql: sql)
+        let rc = sqlite3_prepare_v2(db, sql, -1, &s, nil)
+        if rc != SQLITE_OK {
+            try throwSQLiteError(code: rc, handle: db)
         }
         self.db = db
         self.stmt = s!
@@ -50,7 +51,8 @@ struct Statement {
     mutating func step() throws -> Int32 {
         let rc = sqlite3_step(stmt)
         if rc == SQLITE_ROW || rc == SQLITE_DONE { return rc }
-        throw DatabaseError.stepFailed(String(cString: sqlite3_errmsg(db)))
+
+        try throwSQLiteError(code: rc, handle: db)
     }
 }
 
@@ -320,7 +322,7 @@ extension Transaction {
             } else {
                 message = String(cString: sqlite3_errmsg(db))
             }
-            throw DatabaseError.sqlite3Error(rc, message)
+            try throwSQLiteError(code: rc, message: message)
         }
     }
 
@@ -329,8 +331,7 @@ extension Transaction {
         var stmt: OpaquePointer?
         let rcPrep = sqlite3_prepare_v2(db, sql, -1, &stmt, nil)
         guard rcPrep == SQLITE_OK, let stmt else {
-            let msg = String(cString: sqlite3_errmsg(db))
-            throw DatabaseError.sqlite3Error(rcPrep, msg)
+            try throwSQLiteError(code: rcPrep, handle: db)
         }
         defer { sqlite3_finalize(stmt) }
 
@@ -346,8 +347,7 @@ extension Transaction {
 
         let rcStep = sqlite3_step(stmt)
         if rcStep != SQLITE_DONE && rcStep != SQLITE_ROW {
-            let msg = String(cString: sqlite3_errmsg(db))
-            throw DatabaseError.sqlite3Error(rcStep, msg)
+            try throwSQLiteError(code: rcStep, handle: db)
         }
     }
 

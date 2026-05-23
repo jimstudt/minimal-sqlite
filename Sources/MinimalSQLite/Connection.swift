@@ -40,14 +40,14 @@ private func pragma(_ handle: OpaquePointer, _ statement: String) throws {
 /// temporary shared-cache in-memory database that exists only while its handles
 /// remain open.
 public actor SQLDatabase {
-    struct Connection: Hashable, @unchecked Sendable {
+    public struct Connection: Hashable, @unchecked Sendable {
         let handle: OpaquePointer
 
-        static func == (lhs: Connection, rhs: Connection) -> Bool {
+        public static func == (lhs: Connection, rhs: Connection) -> Bool {
             lhs.handle == rhs.handle
         }
 
-        func hash(into hasher: inout Hasher) {
+        public func hash(into hasher: inout Hasher) {
             hasher.combine(UInt(bitPattern: handle))
         }
     }

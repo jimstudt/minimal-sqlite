@@ -17,7 +17,7 @@ let database = try SQLDatabase(at: databaseURL)
 let memoryDatabase = try SQLDatabase(at: nil)
 ```
 
-A database owns one writer connection and a pool of reader connections. Writer work uses the writer connection, and read-only work uses a reader connection. Foreign-key enforcement is enabled by default on all connections.
+A database owns one writer connection and a pool of reader connections. Read-write transactions are serialized through the single writer connection. Read-only transactions borrow connections from the reader pool, allowing several reads to run at once up to the configured pool size, which defaults to 4. Foreign-key enforcement is enabled by default on all connections.
 
 When you are finished with a database, call ``SQLDatabase/close()`` to release the SQLite handles before the actor is deallocated.
 
@@ -94,11 +94,25 @@ let user: (Int, String)? = try await database.lookup(
 )
 ```
 
-Use ``SQLDatabase/queryDict(_:bind:)`` when the selected columns are dynamic or when a dictionary is more convenient than a typed tuple.
+Use `queryDict(_:bind:)` when the selected columns are dynamic or when a dictionary is more convenient than a typed tuple. Pass an array of ``SQLDatabase/Value`` values when the parameters are already collected.
+
+```swift
+let minimumAge = 18
+let maximumAge = 65
+let values: [any SQLDatabase.Value] = [minimumAge, maximumAge]
+let rows = try await database.queryDict(
+    "SELECT id, name, age FROM users WHERE age BETWEEN ? AND ? ORDER BY name",
+    bind: values
+)
+```
+
+For fixed call sites, use the argument pack overload to pass bound values inline.
 
 ```swift
 let rows = try await database.queryDict(
-    "SELECT id, name, age FROM users ORDER BY name"
+    "SELECT id, name, age FROM users WHERE age BETWEEN ? AND ? ORDER BY name",
+    bind: 18,
+    65
 )
 ```
 
@@ -169,7 +183,7 @@ Inside a ``WriteTransaction``, use ``WriteTransaction/lastInsertRowID()``, ``Wri
 - ``SQLDatabase/execute(_:parameters:)``
 - ``SQLDatabase/lookup(_:parameters:)``
 - ``SQLDatabase/query(_:parameters:)``
-- ``SQLDatabase/queryDict(_:bind:)``
+- ``SQLDatabase/queryDict(_:)``
 
 ### Values
 

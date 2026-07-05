@@ -114,6 +114,42 @@ let rows: [(Int, String, Date?)] = try await database.query(
 )
 ```
 
+Use ``RowID`` when you want to make SQLite rowid values explicit in your model code.
+
+```swift
+let rows: [(RowID, String)] = try await database.query(
+    "SELECT rowid, name FROM users"
+)
+```
+
+The built-in `Date` conformance preserves its original behavior: it reads integer Unix epochs or ISO 8601 text and binds dates as integer Unix epochs. For legacy schemas that store dates as formatted SQLite text, define a ``SQLiteDateStringFormat`` and use ``SQLiteDateString``.
+
+```swift
+enum TimestampFormat: SQLiteDateStringFormat {
+    static func parse(_ value: String) -> Date? {
+        formatter.date(from: value)
+    }
+
+    static func string(from date: Date) -> String {
+        formatter.string(from: date)
+    }
+
+    private static var formatter: DateFormatter {
+        let formatter = DateFormatter()
+        formatter.dateFormat = "yyyy-MM-dd HH:mm:ss"
+        formatter.timeZone = TimeZone(secondsFromGMT: 0)
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        return formatter
+    }
+}
+
+typealias Timestamp = SQLiteDateString<TimestampFormat>
+```
+
+### Writer Metadata
+
+Inside a ``WriteTransaction``, use ``WriteTransaction/lastInsertRowID()``, ``WriteTransaction/changes()``, and ``WriteTransaction/totalChanges()`` when SQLite write metadata is needed.
+
 ## Topics
 
 ### Connections
@@ -138,4 +174,7 @@ let rows: [(Int, String, Date?)] = try await database.query(
 ### Values
 
 - ``SQLDatabase/Value``
+- ``RowID``
 - ``Null``
+- ``SQLiteDateString``
+- ``SQLiteDateStringFormat``

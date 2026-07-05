@@ -33,6 +33,87 @@ extension MinimalSQLite.SQLDatabase {
     }
 }
 
+/// A SQLite row identifier value.
+///
+/// Use `RowID` when selecting SQLite's hidden `rowid`, an explicit integer
+/// primary key, or metadata such as `last_insert_rowid()`. It keeps row-id
+/// intent visible at call sites while still binding and reading as an integer.
+public struct RowID: Hashable, Comparable, RawRepresentable, Sendable {
+    public let rawValue: Int64
+
+    public init(rawValue: Int64) {
+        self.rawValue = rawValue
+    }
+
+    public init(_ value: Int64) {
+        self.rawValue = value
+    }
+
+    public init(_ value: Int) {
+        self.rawValue = Int64(value)
+    }
+
+    public var intValue: Int {
+        Int(rawValue)
+    }
+
+    public static func < (lhs: RowID, rhs: RowID) -> Bool {
+        lhs.rawValue < rhs.rawValue
+    }
+}
+
+extension RowID: MinimalSQLite.SQLDatabase.Value {
+    public static func read(from stmt: OpaquePointer, col: Int32) throws -> RowID {
+        RowID(sqlite3_column_int64(stmt, col))
+    }
+
+    public func bind(to stmt: OpaquePointer, index: Int32) throws {
+        if sqlite3_bind_int64(stmt, index, rawValue) != SQLITE_OK {
+            throw MinimalSQLite.SQLDatabase.Error.bindFailed(String(cString: sqlite3_errmsg(sqlite3_db_handle(stmt))))
+        }
+    }
+}
+
+/// Describes a textual SQLite date format.
+///
+/// This is intentionally separate from `Date`'s built-in `Value` conformance,
+/// which reads integer epochs or ISO 8601 text and binds integer epochs.
+public protocol SQLiteDateStringFormat: Sendable {
+    static func parse(_ value: String) -> Date?
+    static func string(from date: Date) -> String
+}
+
+/// A `Date` stored in SQLite as text using a caller-provided format.
+public struct SQLiteDateString<Format: SQLiteDateStringFormat>: Hashable, Sendable {
+    public let date: Date
+
+    public init(_ date: Date) {
+        self.date = date
+    }
+}
+
+extension SQLiteDateString: MinimalSQLite.SQLDatabase.Value {
+    public static func read(from stmt: OpaquePointer, col: Int32) throws -> SQLiteDateString<Format> {
+        guard let c = sqlite3_column_text(stmt, col) else {
+            throw MinimalSQLite.SQLDatabase.Error.readFailed("Unable to read date string from column")
+        }
+
+        let string = String(cString: c)
+        guard let date = Format.parse(string) else {
+            throw MinimalSQLite.SQLDatabase.Error.readFailed("Unable to decode Date from \(string)")
+        }
+        return SQLiteDateString(date)
+    }
+
+    public func bind(to stmt: OpaquePointer, index: Int32) throws {
+        let string = Format.string(from: date)
+        let rc = sqlite3_bind_text(stmt, index, string, -1, unsafeBitCast(-1, to: sqlite3_destructor_type.self))
+        if rc != SQLITE_OK {
+            throw MinimalSQLite.SQLDatabase.Error.bindFailed(String(cString: sqlite3_errmsg(sqlite3_db_handle(stmt))))
+        }
+    }
+}
+
 /// SQLite integer storage for `Int64` values.
 extension Int64: MinimalSQLite.SQLDatabase.Value {
     /// Reads an integer column with SQLite's 64-bit integer API.
@@ -208,4 +289,3 @@ extension Data: MinimalSQLite.SQLDatabase.Value {
         }
     }
 }
-

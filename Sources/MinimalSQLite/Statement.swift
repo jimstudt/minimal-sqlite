@@ -230,6 +230,21 @@ extension MinimalSQLite.SQLDatabase {
 extension WriteTransaction {
     public typealias Value = MinimalSQLite.SQLDatabase.Value
     typealias DatabaseError = MinimalSQLite.SQLDatabase.Error
+
+    /// Returns SQLite's last inserted rowid for this writer connection.
+    public func lastInsertRowID() -> RowID {
+        RowID(sqlite3_last_insert_rowid(connection.handle))
+    }
+
+    /// Returns the number of rows changed by the most recent write on this connection.
+    public func changes() -> Int {
+        Int(sqlite3_changes(connection.handle))
+    }
+
+    /// Returns the total number of rows changed by this connection.
+    public func totalChanges() -> Int {
+        Int(sqlite3_total_changes(connection.handle))
+    }
     
     /// Executes SQL that does not need bound parameters or returned rows.
     ///

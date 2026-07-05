@@ -20,6 +20,26 @@ let schema : String = """
     ) STRICT;
     """
 
+enum TestTimestampFormat: SQLiteDateStringFormat {
+    static let formatter: DateFormatter = {
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.timeZone = TimeZone(secondsFromGMT: 0)
+        formatter.dateFormat = "yyyy-MM-dd HH:mm:ss"
+        return formatter
+    }()
+
+    static func parse(_ value: String) -> Date? {
+        formatter.date(from: value)
+    }
+
+    static func string(from date: Date) -> String {
+        formatter.string(from: date)
+    }
+}
+
+typealias TestTimestamp = SQLiteDateString<TestTimestampFormat>
+
 @Suite("CreateSQLDatabase")
 struct CreateSQLDatabaseTests {
     @Test("Open in memory")
@@ -206,5 +226,105 @@ struct CreateSQLDatabaseTests {
             try await db.close()
         }
     }
-}
 
+    @Test("RowID reads hidden rowids")
+    func rowIDReadsHiddenRowids() async throws {
+        let db = try MinimalSQLite.SQLDatabase(at: nil)
+
+        await #expect(throws: Never.self) {
+            try await db.execute(schema)
+            try await db.execute("insert into names (first, last) values (?, ?)", "Zaphod", "Beeblebrox")
+
+            let rows: [(RowID, String)] = try await db.query(
+                "select rowid, first from names"
+            )
+
+            #expect(rows.count == 1)
+            #expect(rows[0].0.intValue == 1)
+            #expect(rows[0].1 == "Zaphod")
+            try await db.close()
+        }
+    }
+
+    @Test("Write transaction exposes row and change metadata")
+    func writeTransactionMetadata() async throws {
+        let db = try MinimalSQLite.SQLDatabase(at: nil)
+
+        await #expect(throws: Never.self) {
+            try await db.execute(schema)
+
+            let metadata = try await db.readwrite { tx in
+                try await tx.execute("insert into names (first, last) values (?, ?)", "Marvin", "Android")
+                let inserted = await tx.lastInsertRowID()
+                let insertChanges = await tx.changes()
+
+                try await tx.execute("update names set last = ? where rowid = ?", "Paranoid Android", inserted)
+                let updateChanges = await tx.changes()
+                let total = await tx.totalChanges()
+
+                return (inserted, insertChanges, updateChanges, total)
+            }
+
+            #expect(metadata.0.intValue == 1)
+            #expect(metadata.1 == 1)
+            #expect(metadata.2 == 1)
+            #expect(metadata.3 == 2)
+            try await db.close()
+        }
+    }
+
+    @Test("SQLiteDateString stores formatted text dates")
+    func sqliteDateStringStoresFormattedTextDates() async throws {
+        let db = try MinimalSQLite.SQLDatabase(at: nil)
+
+        await #expect(throws: Never.self) {
+            try await db.execute("""
+                create table events (
+                    name TEXT NOT NULL,
+                    happened TEXT,
+                    optional_happened TEXT
+                ) STRICT;
+                """)
+
+            let date = TestTimestampFormat.parse("2026-07-04 22:32:00")!
+            try await db.execute(
+                "insert into events (name, happened, optional_happened) values (?, ?, ?)",
+                "copied-db",
+                TestTimestamp(date),
+                Optional<TestTimestamp>.none
+            )
+
+            let row: (String, TestTimestamp, TestTimestamp?)? = try await db.lookup(
+                "select name, happened, optional_happened from events"
+            )
+
+            let found = try #require(row)
+            #expect(found.0 == "copied-db")
+            #expect(TestTimestampFormat.string(from: found.1.date) == "2026-07-04 22:32:00")
+            #expect(found.2 == nil)
+            try await db.close()
+        }
+    }
+
+    @Test("SQLiteDateString throws on invalid formatted dates")
+    func sqliteDateStringThrowsOnInvalidDateText() async throws {
+        let db = try MinimalSQLite.SQLDatabase(at: nil)
+
+        await #expect(throws: Never.self) {
+            try await db.execute("""
+                create table events (
+                    happened TEXT NOT NULL
+                ) STRICT;
+                """)
+            try await db.execute("insert into events (happened) values (?)", "not-a-date")
+        }
+
+        await #expect(throws: MinimalSQLite.SQLDatabase.Error.self) {
+            let _: [(TestTimestamp)] = try await db.query("select happened from events")
+        }
+
+        await #expect(throws: Never.self) {
+            try await db.close()
+        }
+    }
+}

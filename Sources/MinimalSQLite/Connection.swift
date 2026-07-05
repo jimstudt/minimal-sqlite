@@ -56,7 +56,7 @@ public actor SQLDatabase {
     let readerPool: AsyncTokenPool<Connection>
     
     /// Errors thrown by SQLite connection, statement, and row-reading operations.
-    enum Error : Swift.Error {
+    public enum Error : Swift.Error {
         /// A database open operation was requested while a handle was already open.
         case databaseAlreadyOpen
         /// SQLite returned an error code and message.
@@ -327,4 +327,3 @@ public actor SQLDatabase {
     }
 
 }
-

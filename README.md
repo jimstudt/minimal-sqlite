@@ -231,6 +231,10 @@ The goal is a straightforward Swift Concurrency wrapper around SQLite for projec
 
 ## Documentation
 
+Generated API documentation is published with GitHub Pages:
+
+<https://jimstudt.github.io/minimal-sqlite/documentation/minimalsqlite/>
+
 DocC documentation lives in:
 
 ```text

@@ -39,5 +39,8 @@ let package = Package(
     products: [
         .library(name: "MinimalSQLite", targets: ["MinimalSQLite"])
     ],
+    dependencies: [
+        .package(url: "https://github.com/swiftlang/swift-docc-plugin", from: "1.5.0")
+    ],
     targets: targets
 )

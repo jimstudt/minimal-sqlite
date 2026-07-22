@@ -29,6 +29,27 @@ private func pragma(_ handle: OpaquePointer, _ statement: String) throws {
     }
 }
 
+private func textPragma(_ handle: OpaquePointer, _ statement: String) throws -> String {
+    var sqliteStatement: OpaquePointer?
+    let prepareRC = sqlite3_prepare_v2(handle, statement, -1, &sqliteStatement, nil)
+    guard prepareRC == SQLITE_OK, let sqliteStatement else {
+        try throwSQLiteError(code: prepareRC, handle: handle)
+    }
+    defer { sqlite3_finalize(sqliteStatement) }
+
+    let stepRC = sqlite3_step(sqliteStatement)
+    guard stepRC == SQLITE_ROW else {
+        if stepRC == SQLITE_DONE {
+            throw MinimalSQLite.SQLDatabase.Error.readFailed("pragma returned no value: \(statement)")
+        }
+        try throwSQLiteError(code: stepRC, handle: handle)
+    }
+    guard let text = sqlite3_column_text(sqliteStatement, 0) else {
+        throw MinimalSQLite.SQLDatabase.Error.readFailed("pragma returned NULL: \(statement)")
+    }
+    return String(cString: text)
+}
+
 /// An actor that owns SQLite database handles.
 ///
 /// `SQLDatabase` keeps a writer handle and optional readonly reader handles.
@@ -40,6 +61,16 @@ private func pragma(_ handle: OpaquePointer, _ statement: String) throws {
 /// temporary shared-cache in-memory database that exists only while its handles
 /// remain open.
 public actor SQLDatabase {
+    /// SQLite's persistent and per-connection rollback-journal modes.
+    public enum JournalMode: String, Sendable {
+        case delete = "DELETE"
+        case truncate = "TRUNCATE"
+        case persist = "PERSIST"
+        case memory = "MEMORY"
+        case wal = "WAL"
+        case off = "OFF"
+    }
+
     public struct Connection: Hashable, @unchecked Sendable {
         let handle: OpaquePointer
 
@@ -73,6 +104,8 @@ public actor SQLDatabase {
         case transactionLocked(String)
         /// SQLite failed while advancing or executing a statement.
         case stepFailed(String)
+        /// SQLite could not activate the requested journal mode for this database.
+        case journalModeUnavailable(database: String, requested: String, actual: String)
         /// A query expected exactly one row but returned a different number of rows.
         case rowNotUnique
         case databaseClosed
@@ -102,10 +135,20 @@ public actor SQLDatabase {
     ///   - readers: The number of readonly reader handles to open.
     ///   - foreignKeys: Pass `true` to enable SQLite foreign-key enforcement on
     ///     every writer and reader connection.
+    ///   - journalMode: A journal mode to apply on the writer before any reader
+    ///     handles are opened. Use this instead of changing `journal_mode`
+    ///     inside a transaction.
     /// - Throws: `SQLDatabase.Error.sqlite3Error` if SQLite cannot open the
     ///   database, configure its pragmas, or open one of its readonly reader
     ///   handles.
-    public init(at url: URL?, canCreate: Bool = true, readOnly: Bool = false, readers: Int = 4, foreignKeys: Bool = true) throws {
+    public init(
+        at url: URL?,
+        canCreate: Bool = true,
+        readOnly: Bool = false,
+        readers: Int = 4,
+        foreignKeys: Bool = true,
+        journalMode: JournalMode? = nil
+    ) throws {
         let databaseName: String
         let writerFlags: Int32
         let readerFlags: Int32
@@ -141,6 +184,16 @@ public actor SQLDatabase {
 
         var readerHandles: [OpaquePointer] = []
         do {
+            if let journalMode {
+                let actualMode = try textPragma(writerHandle, "PRAGMA journal_mode = \(journalMode.rawValue);")
+                guard actualMode.caseInsensitiveCompare(journalMode.rawValue) == .orderedSame else {
+                    throw Error.journalModeUnavailable(
+                        database: databaseName,
+                        requested: journalMode.rawValue,
+                        actual: actualMode
+                    )
+                }
+            }
             if foreignKeys { try pragma(writerHandle, "PRAGMA foreign_keys = ON;") }
             try pragma(writerHandle, "PRAGMA synchronous = NORMAL")
 
@@ -171,6 +224,12 @@ public actor SQLDatabase {
 
                 readerHandles.append(readerHandle)
             }
+        } catch let Error.sqlite3Error(code, message) {
+            sqlite3_close(writerHandle)
+            for readerHandle in readerHandles {
+                sqlite3_close(readerHandle)
+            }
+            throw Error.sqlite3Error(code, "\(databaseName): \(message)")
         } catch {
             sqlite3_close(writerHandle)
             for readerHandle in readerHandles {

@@ -10,6 +10,7 @@ This is not an ORM. It is meant to be small, readable, and boring in the best wa
 
 - `SQLDatabase` actor owns SQLite connections.
 - One writer connection plus a pool of read-only connections.
+- Optional journal-mode configuration before reader connections are opened.
 - Explicit `readwrite` and `readonly` transaction APIs.
 - Read-only transactions do not expose `execute`, so accidental writes are rejected at compile time.
 - Convenience `execute`, `query`, `lookup`, and `queryDict` helpers for one-off operations.
@@ -33,7 +34,7 @@ Add MinimalSQLite to your Swift package dependencies:
 
 ```swift
 dependencies: [
-    .package(url: "https://github.com/jimstudt/minimal-sqlite.git", from: "0.1.0")
+    .package(url: "https://github.com/jimstudt/minimal-sqlite.git", from: "0.1.1")
 ]
 ```
 
@@ -48,8 +49,6 @@ Then add the product to your target:
 )
 ```
 
-Until the first tagged release exists, use a branch or local path dependency while developing.
-
 ## Quick Start
 
 ```swift
@@ -57,7 +56,7 @@ import Foundation
 import MinimalSQLite
 
 let databaseURL = URL(fileURLWithPath: "/tmp/example.sqlite")
-let db = try SQLDatabase(at: databaseURL)
+let db = try SQLDatabase(at: databaseURL, journalMode: .wal)
 
 try await db.execute("""
     CREATE TABLE IF NOT EXISTS names (
@@ -106,6 +105,16 @@ let count: Int? = try await db.readonly { tx in
 ```
 
 SQLite `BUSY` and `LOCKED` errors are retried by rerunning the transaction block. Because of that, transaction bodies should avoid non-idempotent side effects outside SQLite, such as network calls, file writes, notifications, or cache mutation.
+
+Journal modes such as WAL must be selected while opening the database, before
+MinimalSQLite opens its reader pool and before a transaction begins:
+
+```swift
+let db = try SQLDatabase(at: databaseURL, journalMode: .wal)
+```
+
+MinimalSQLite verifies the mode SQLite actually selected. Requesting a mode
+that SQLite cannot activate throws `SQLDatabase.Error.journalModeUnavailable`.
 
 ## Query Shapes
 

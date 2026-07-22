@@ -50,6 +50,40 @@ struct CreateSQLDatabaseTests {
             try await db.close()
         }
     }
+
+    @Test("Configure WAL before opening reader connections")
+    func configureWriteAheadLogging() async throws {
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent("minimal-sqlite-wal-\(UUID().uuidString).sqlite")
+        defer {
+            for suffix in ["", "-wal", "-shm"] {
+                try? FileManager.default.removeItem(atPath: url.path + suffix)
+            }
+        }
+
+        let db: MinimalSQLite.SQLDatabase
+        do {
+            db = try MinimalSQLite.SQLDatabase(at: url, journalMode: .wal)
+        } catch {
+            Issue.record("Could not open WAL database at \(url.path): \(error)")
+            return
+        }
+        try await db.execute("CREATE TABLE wal_test (value TEXT NOT NULL)")
+        let configuredModes: [String] = try await db.query("PRAGMA journal_mode")
+        #expect(configuredModes.map { $0.lowercased() } == ["wal"])
+        try await db.close()
+
+        let reopened: MinimalSQLite.SQLDatabase
+        do {
+            reopened = try MinimalSQLite.SQLDatabase(at: url)
+        } catch {
+            Issue.record("Could not reopen WAL database at \(url.path): \(error)")
+            return
+        }
+        let persistedModes: [String] = try await reopened.query("PRAGMA journal_mode")
+        #expect(persistedModes.map { $0.lowercased() } == ["wal"])
+        try await reopened.close()
+    }
     
     @Test("Create Table in memory")
     func createTableInMemory() async throws {

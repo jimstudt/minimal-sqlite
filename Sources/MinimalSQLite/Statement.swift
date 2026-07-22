@@ -59,8 +59,10 @@ struct Statement {
 extension MinimalSQLite.SQLDatabase {
     /// Executes SQL inside a one-off read-write transaction.
     ///
-    /// Use this convenience method for schema changes, pragmas, and simple SQL
-    /// statements that do not need bound parameters or returned rows. For
+    /// Use this convenience method for schema changes, transaction-compatible
+    /// pragmas, and simple SQL statements that do not need bound parameters or
+    /// returned rows. Configure journal mode through `SQLDatabase.init` because
+    /// SQLite cannot change it from inside this method's transaction. For
     /// multiple write statements that must commit together, use `readwrite(_:)`.
     ///
     /// - Parameter sql: The SQL string to execute.

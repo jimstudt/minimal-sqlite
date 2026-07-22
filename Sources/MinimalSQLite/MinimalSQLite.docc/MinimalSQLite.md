@@ -13,11 +13,15 @@ The package is intentionally close to SQLite. You still write SQL directly, choo
 Create one ``SQLDatabase`` actor for each SQLite database you want to use. Pass a file URL for an on-disk database, or pass `nil` for a shared in-memory database.
 
 ```swift
-let database = try SQLDatabase(at: databaseURL)
+let database = try SQLDatabase(at: databaseURL, journalMode: .wal)
 let memoryDatabase = try SQLDatabase(at: nil)
 ```
 
 A database owns one writer connection and a pool of reader connections. Read-write transactions are serialized through the single writer connection. Read-only transactions borrow connections from the reader pool, allowing several reads to run at once up to the configured pool size, which defaults to 4. Foreign-key enforcement is enabled by default on all connections.
+
+For journal modes that must be selected outside a transaction, pass
+`journalMode` while opening the database. MinimalSQLite configures and verifies
+the mode on the writer before it opens any reader connections.
 
 When you are finished with a database, call ``SQLDatabase/close()`` to release the SQLite handles before the actor is deallocated.
 

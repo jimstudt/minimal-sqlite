@@ -1,4 +1,4 @@
-# MinimalSQLite
+# ``MinimalSQLite``
 
 Use SQLite from Swift with a small async API for connections, statements, values, and read-only or read-write transactions.
 
@@ -16,7 +16,7 @@ Add MinimalSQLite to the `dependencies` in your package manifest:
 dependencies: [
     .package(
         url: "https://github.com/jimstudt/minimal-sqlite.git",
-        from: "0.1.2"
+        from: "0.1.3"
     )
 ]
 ```

@@ -39,7 +39,7 @@ Add MinimalSQLite to your Swift package dependencies:
 
 ```swift
 dependencies: [
-    .package(url: "https://github.com/jimstudt/minimal-sqlite.git", from: "0.1.3")
+    .package(url: "https://github.com/jimstudt/minimal-sqlite.git", from: "0.1.4")
 ]
 ```
 
@@ -242,19 +242,3 @@ MinimalSQLite is deliberately small:
 - No dependency weight beyond SQLite itself.
 
 The goal is a straightforward Swift Concurrency wrapper around SQLite for projects that are comfortable writing SQL directly.
-
-## Documentation
-
-Generated API documentation is published with GitHub Pages:
-
-<https://jimstudt.github.io/minimal-sqlite/documentation/minimalsqlite/>
-
-DocC documentation lives in:
-
-```text
-Sources/MinimalSQLite/MinimalSQLite.docc
-```
-
-## Status
-
-This package is being prepared for public release. API changes should remain additive and source-compatible whenever practical.

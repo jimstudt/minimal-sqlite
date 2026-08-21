@@ -230,6 +230,7 @@ extension MinimalSQLite.SQLDatabase {
 }
 
 extension WriteTransaction {
+    /// The protocol used for values bound to and decoded from SQLite statements.
     public typealias Value = MinimalSQLite.SQLDatabase.Value
     typealias DatabaseError = MinimalSQLite.SQLDatabase.Error
 
@@ -312,6 +313,7 @@ extension WriteTransaction {
 
 
 extension Transaction {
+    /// The protocol used for values bound to and decoded from SQLite statements.
     public typealias Value = MinimalSQLite.SQLDatabase.Value
     typealias DatabaseError = MinimalSQLite.SQLDatabase.Error
 

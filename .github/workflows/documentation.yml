@@ -12,7 +12,7 @@ permissions:
 
 concurrency:
   group: pages
-  cancel-in-progress: false
+  cancel-in-progress: true
 
 jobs:
   build:
@@ -29,7 +29,9 @@ jobs:
             --target MinimalSQLite \
             --output-path ./docs \
             --transform-for-static-hosting \
-            --hosting-base-path minimal-sqlite
+            --hosting-base-path minimal-sqlite \
+            --analyze \
+            --warnings-as-errors
 
       - name: Configure Pages
         uses: actions/configure-pages@v5

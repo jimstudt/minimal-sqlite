@@ -1,5 +1,10 @@
 # MinimalSQLite
 
+[![Swift 6.2](https://img.shields.io/badge/Swift-6.2-F05138?logo=swift&logoColor=white)](https://www.swift.org/)
+[![Platforms](https://img.shields.io/badge/platforms-macOS%2026%2B%20%7C%20Linux-lightgrey)](https://github.com/jimstudt/minimal-sqlite)
+[![Documentation](https://img.shields.io/badge/DocC-Documentation-0A84FF)](https://jimstudt.github.io/minimal-sqlite/documentation/minimalsqlite/)
+[![Documentation workflow](https://github.com/jimstudt/minimal-sqlite/actions/workflows/documentation.yml/badge.svg)](https://github.com/jimstudt/minimal-sqlite/actions/workflows/documentation.yml)
+
 MinimalSQLite is a tiny Swift 6.2 SQLite wrapper built for Swift Concurrency.
 
 It intentionally stays close to SQLite: you write SQL directly, choose your own schema, and keep SQLite's transaction model visible. The package handles the repetitive parts around connection ownership, prepared statements, parameter binding, row decoding, and retryable read/write transaction boundaries.
@@ -34,7 +39,7 @@ Add MinimalSQLite to your Swift package dependencies:
 
 ```swift
 dependencies: [
-    .package(url: "https://github.com/jimstudt/minimal-sqlite.git", from: "0.1.1")
+    .package(url: "https://github.com/jimstudt/minimal-sqlite.git", from: "0.1.2")
 ]
 ```
 

@@ -39,20 +39,31 @@ extension MinimalSQLite.SQLDatabase {
 /// primary key, or metadata such as `last_insert_rowid()`. It keeps row-id
 /// intent visible at call sites while still binding and reading as an integer.
 public struct RowID: Hashable, Comparable, RawRepresentable, Sendable {
+    /// The signed 64-bit integer used by SQLite for the row identifier.
     public let rawValue: Int64
 
+    /// Creates a row identifier from its signed 64-bit representation.
+    ///
+    /// - Parameter rawValue: The SQLite row identifier.
     public init(rawValue: Int64) {
         self.rawValue = rawValue
     }
 
+    /// Creates a row identifier from a signed 64-bit integer.
+    ///
+    /// - Parameter value: The SQLite row identifier.
     public init(_ value: Int64) {
         self.rawValue = value
     }
 
+    /// Creates a row identifier from a platform-sized integer.
+    ///
+    /// - Parameter value: The SQLite row identifier.
     public init(_ value: Int) {
         self.rawValue = Int64(value)
     }
 
+    /// The row identifier converted to a platform-sized integer.
     public var intValue: Int {
         Int(rawValue)
     }
@@ -63,10 +74,12 @@ public struct RowID: Hashable, Comparable, RawRepresentable, Sendable {
 }
 
 extension RowID: MinimalSQLite.SQLDatabase.Value {
+    /// Reads a row identifier from a SQLite integer column.
     public static func read(from stmt: OpaquePointer, col: Int32) throws -> RowID {
         RowID(sqlite3_column_int64(stmt, col))
     }
 
+    /// Binds the row identifier as a SQLite integer.
     public func bind(to stmt: OpaquePointer, index: Int32) throws {
         if sqlite3_bind_int64(stmt, index, rawValue) != SQLITE_OK {
             throw MinimalSQLite.SQLDatabase.Error.bindFailed(String(cString: sqlite3_errmsg(sqlite3_db_handle(stmt))))
@@ -79,20 +92,38 @@ extension RowID: MinimalSQLite.SQLDatabase.Value {
 /// This is intentionally separate from `Date`'s built-in `Value` conformance,
 /// which reads integer epochs or ISO 8601 text and binds integer epochs.
 public protocol SQLiteDateStringFormat: Sendable {
+    /// Parses a stored SQLite text value as a date.
+    ///
+    /// - Parameter value: The text read from SQLite.
+    /// - Returns: The decoded date, or `nil` when the text is invalid.
     static func parse(_ value: String) -> Date?
+
+    /// Formats a date for storage in a SQLite text column.
+    ///
+    /// - Parameter date: The date to encode.
+    /// - Returns: The text to bind to SQLite.
     static func string(from date: Date) -> String
 }
 
 /// A `Date` stored in SQLite as text using a caller-provided format.
+///
+/// Define a ``SQLiteDateStringFormat`` for the schema's textual timestamp
+/// representation, then use this wrapper as a bound value or typed query
+/// result. The wrapper leaves the package's built-in `Date` behavior unchanged.
 public struct SQLiteDateString<Format: SQLiteDateStringFormat>: Hashable, Sendable {
+    /// The decoded date value.
     public let date: Date
 
+    /// Creates a formatted SQLite date value.
+    ///
+    /// - Parameter date: The date to wrap.
     public init(_ date: Date) {
         self.date = date
     }
 }
 
 extension SQLiteDateString: MinimalSQLite.SQLDatabase.Value {
+    /// Reads text from SQLite and parses it with `Format`.
     public static func read(from stmt: OpaquePointer, col: Int32) throws -> SQLiteDateString<Format> {
         guard let c = sqlite3_column_text(stmt, col) else {
             throw MinimalSQLite.SQLDatabase.Error.readFailed("Unable to read date string from column")
@@ -105,6 +136,7 @@ extension SQLiteDateString: MinimalSQLite.SQLDatabase.Value {
         return SQLiteDateString(date)
     }
 
+    /// Formats the wrapped date with `Format` and binds it as SQLite text.
     public func bind(to stmt: OpaquePointer, index: Int32) throws {
         let string = Format.string(from: date)
         let rc = sqlite3_bind_text(stmt, index, string, -1, unsafeBitCast(-1, to: sqlite3_destructor_type.self))
@@ -258,6 +290,7 @@ extension Optional: MinimalSQLite.SQLDatabase.Value where Wrapped: MinimalSQLite
 /// Use `Null` when you need a concrete value that binds as SQLite `NULL` rather
 /// than an optional value.
 public struct Null: MinimalSQLite.SQLDatabase.Value {
+    /// Creates an explicit SQLite `NULL` value.
     public init() {}
     /// Binds the value as SQLite `NULL`.
     public func bind(to stmt: OpaquePointer, index: Int32) throws {

@@ -8,6 +8,36 @@ MinimalSQLite is a lightweight wrapper around SQLite's C API. It keeps SQLite ha
 
 The package is intentionally close to SQLite. You still write SQL directly, choose your schema, and decide which queries to run. MinimalSQLite handles the repetitive glue: opening and closing the database, preparing statements, binding parameters, stepping through rows, converting SQLite values into Swift types, and lending connections to one operation at a time.
 
+### Adding MinimalSQLite to a Package
+
+Add MinimalSQLite to the `dependencies` in your package manifest:
+
+```swift
+dependencies: [
+    .package(
+        url: "https://github.com/jimstudt/minimal-sqlite.git",
+        from: "0.1.2"
+    )
+]
+```
+
+Then add the library to the target that uses it:
+
+```swift
+.target(
+    name: "YourTarget",
+    dependencies: [
+        .product(name: "MinimalSQLite", package: "minimal-sqlite")
+    ]
+)
+```
+
+Import the module where you use the database APIs:
+
+```swift
+import MinimalSQLite
+```
+
 ### Opening a Database
 
 Create one ``SQLDatabase`` actor for each SQLite database you want to use. Pass a file URL for an on-disk database, or pass `nil` for a shared in-memory database.

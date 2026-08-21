@@ -63,21 +63,37 @@ private func textPragma(_ handle: OpaquePointer, _ statement: String) throws -> 
 public actor SQLDatabase {
     /// SQLite's persistent and per-connection rollback-journal modes.
     public enum JournalMode: String, Sendable {
+        /// Uses SQLite's default rollback journal and deletes it after a transaction.
         case delete = "DELETE"
+        /// Truncates the rollback journal to zero bytes after a transaction.
         case truncate = "TRUNCATE"
+        /// Reuses the rollback journal after marking it inactive.
         case persist = "PERSIST"
+        /// Stores the rollback journal in memory.
         case memory = "MEMORY"
+        /// Uses SQLite's write-ahead log.
         case wal = "WAL"
+        /// Disables the rollback journal.
+        ///
+        /// This mode removes SQLite's rollback protection and is rarely
+        /// appropriate for application databases.
         case off = "OFF"
     }
 
+    /// An opaque identity for a SQLite connection owned by the database.
+    ///
+    /// Transaction actors expose their connection to satisfy ``Transaction``.
+    /// Applications normally use the transaction's statement methods instead
+    /// of interacting with a connection directly.
     public struct Connection: Hashable, @unchecked Sendable {
         let handle: OpaquePointer
 
+        /// Returns whether two values refer to the same SQLite connection.
         public static func == (lhs: Connection, rhs: Connection) -> Bool {
             lhs.handle == rhs.handle
         }
 
+        /// Hashes the identity of the underlying SQLite connection.
         public func hash(into hasher: inout Hasher) {
             hasher.combine(UInt(bitPattern: handle))
         }
@@ -108,6 +124,7 @@ public actor SQLDatabase {
         case journalModeUnavailable(database: String, requested: String, actual: String)
         /// A query expected exactly one row but returned a different number of rows.
         case rowNotUnique
+        /// A database operation was attempted after its connections were closed.
         case databaseClosed
     }
     

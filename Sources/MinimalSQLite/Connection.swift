@@ -126,7 +126,11 @@ public actor SQLDatabase {
         case rowNotUnique
         /// A database operation was attempted after its connections were closed.
         case databaseClosed
+        /// A backup destination was invalid, already existed, or referred to the source database.
+        case invalidBackupDestination(String)
     }
+
+    private let databaseURL: URL?
     
 
     /// Opens a SQLite database connection.
@@ -166,6 +170,7 @@ public actor SQLDatabase {
         foreignKeys: Bool = true,
         journalMode: JournalMode? = nil
     ) throws {
+        self.databaseURL = url?.standardizedFileURL
         let databaseName: String
         let writerFlags: Int32
         let readerFlags: Int32
@@ -257,6 +262,93 @@ public actor SQLDatabase {
 
         self.writerPool = AsyncTokenPool([Connection(handle: writerHandle)])
         self.readerPool = AsyncTokenPool(Set(readerHandles.map { Connection(handle: $0) }))
+    }
+
+    /// Creates a consistent, standalone copy of an open database.
+    ///
+    /// The backup includes committed changes that are still present only in a
+    /// write-ahead log. MinimalSQLite reserves the writer connection for the
+    /// duration of the copy, so application writes wait while existing readers
+    /// may continue. The destination must not already exist and must not refer
+    /// to the source database.
+    ///
+    /// The copy is performed in bounded batches. SQLite lock contention is
+    /// retried asynchronously, and task cancellation stops the backup. Callers
+    /// that need atomic replacement should back up to a temporary URL and move
+    /// the completed file into place themselves.
+    public func backup(to destinationURL: URL) async throws {
+        try await backup(to: destinationURL, pagesPerStep: 256) {}
+    }
+
+    /// Internal controls keep the public API small while allowing deterministic
+    /// tests of suspension, cancellation, and writer serialization.
+    func backup(
+        to destinationURL: URL,
+        pagesPerStep: Int32,
+        afterStep: @escaping @Sendable () async throws -> Void
+    ) async throws {
+        guard pagesPerStep > 0 else {
+            throw Error.invalidBackupDestination("pages per step must be positive")
+        }
+        let destinationURL = destinationURL.standardizedFileURL
+        if databaseURL == destinationURL {
+            throw Error.invalidBackupDestination("the destination is the source database")
+        }
+        if FileManager.default.fileExists(atPath: destinationURL.path) {
+            throw Error.invalidBackupDestination("the destination already exists")
+        }
+
+        try await writerPool.with { source in
+            try Task.checkCancellation()
+
+            var destination: OpaquePointer?
+            let openRC = destinationURL.path.withCString { path in
+                sqlite3_open_v2(
+                    path,
+                    &destination,
+                    SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE | SQLITE_OPEN_EXCLUSIVE,
+                    nil
+                )
+            }
+            guard openRC == SQLITE_OK, let destination else {
+                if let destination { sqlite3_close(destination) }
+                try throwSQLiteError(code: openRC, message: "unable to create backup destination")
+            }
+            var completed = false
+            defer {
+                sqlite3_close(destination)
+                if !completed { try? FileManager.default.removeItem(at: destinationURL) }
+            }
+
+            guard let backup = sqlite3_backup_init(destination, "main", source.handle, "main") else {
+                try throwSQLiteError(code: sqlite3_errcode(destination), handle: destination)
+            }
+            var finished = false
+            defer {
+                if !finished { sqlite3_backup_finish(backup) }
+            }
+
+            while true {
+                try Task.checkCancellation()
+                switch sqlite3_backup_step(backup, pagesPerStep) {
+                case SQLITE_DONE:
+                    let finishRC = sqlite3_backup_finish(backup)
+                    finished = true
+                    guard finishRC == SQLITE_OK else {
+                        try throwSQLiteError(code: finishRC, handle: destination)
+                    }
+                    completed = true
+                    return
+                case SQLITE_OK:
+                    try await afterStep()
+                    await Task.yield()
+                case SQLITE_BUSY, SQLITE_LOCKED:
+                    try await Task.sleep(for: .milliseconds(10))
+                case let code:
+                    try throwSQLiteError(code: code, handle: destination)
+                }
+            }
+        }
     }
 
     deinit {

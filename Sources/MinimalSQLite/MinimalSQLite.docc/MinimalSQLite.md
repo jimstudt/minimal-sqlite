@@ -16,7 +16,7 @@ Add MinimalSQLite to the `dependencies` in your package manifest:
 dependencies: [
     .package(
         url: "https://github.com/jimstudt/minimal-sqlite.git",
-        from: "0.1.4"
+        from: "0.1.5"
     )
 ]
 ```
@@ -54,6 +54,21 @@ For journal modes that must be selected outside a transaction, pass
 the mode on the writer before it opens any reader connections.
 
 When you are finished with a database, call ``SQLDatabase/close()`` to release the SQLite handles before the actor is deallocated.
+
+### Online Backups
+
+Use ``SQLDatabase/backup(to:)`` to create a standalone snapshot without closing
+the source database:
+
+```swift
+let snapshotURL = temporaryDirectory.appending(path: "snapshot.sqlite3")
+try await database.backup(to: snapshotURL)
+```
+
+The destination must not already exist. A backup includes committed WAL changes
+and briefly reserves the writer connection while existing readers may continue.
+Use a temporary destination followed by an atomic move when replacing an
+existing file.
 
 ### Transactions First
 

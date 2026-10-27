@@ -24,6 +24,7 @@ This is not an ORM. It is meant to be small, readable, and boring in the best wa
 - Built-in support for common SQLite value types.
 - Small `RowID` type for hidden SQLite rowids and row-id-like integer keys.
 - Writer metadata helpers: `lastInsertRowID()`, `changes()`, and `totalChanges()`.
+- Online backups of open databases, including committed WAL contents.
 - Optional formatted text-date wrapper for legacy timestamp columns.
 
 ## Requirements
@@ -216,6 +217,21 @@ Inside a `WriteTransaction`, these metadata helpers are available:
 - `lastInsertRowID() -> RowID`
 - `changes() -> Int`
 - `totalChanges() -> Int`
+
+## Online Backups
+
+Create a standalone copy of an open database with `backup(to:)`:
+
+```swift
+let snapshotURL = temporaryDirectory.appending(path: "snapshot.sqlite3")
+try await db.backup(to: snapshotURL)
+```
+
+The destination must not already exist. The backup includes committed changes
+that have not yet been checkpointed from a WAL. MinimalSQLite temporarily
+reserves the writer connection while copying in bounded batches, while existing
+readers may continue. To replace a user-facing file atomically, back up to a
+temporary URL and move the completed file into place after this call returns.
 
 ## Commands
 

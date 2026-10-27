@@ -16,7 +16,7 @@ Add MinimalSQLite to the `dependencies` in your package manifest:
 dependencies: [
     .package(
         url: "https://github.com/jimstudt/minimal-sqlite.git",
-        from: "0.1.5"
+        from: "0.1.6"
     )
 ]
 ```

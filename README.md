@@ -40,7 +40,7 @@ Add MinimalSQLite to your Swift package dependencies:
 
 ```swift
 dependencies: [
-    .package(url: "https://github.com/jimstudt/minimal-sqlite.git", from: "0.1.4")
+    .package(url: "https://github.com/jimstudt/minimal-sqlite.git", from: "0.1.6")
 ]
 ```
 

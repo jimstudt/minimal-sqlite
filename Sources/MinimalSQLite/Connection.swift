@@ -307,7 +307,10 @@ public actor SQLDatabase {
                 sqlite3_open_v2(
                     path,
                     &destination,
-                    SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE | SQLITE_OPEN_EXCLUSIVE,
+                    // SQLITE_OPEN_EXCLUSIVE is reserved for VFS implementations and has no
+                    // exclusive-create behavior when passed to sqlite3_open_v2(). The explicit
+                    // existence check above defines this API's destination contract.
+                    SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE,
                     nil
                 )
             }

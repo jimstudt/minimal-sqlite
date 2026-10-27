@@ -130,6 +130,54 @@ struct BackupTests {
         try await source.close()
     }
 
+    @Test("Cancelling while the destination is locked removes the incomplete copy")
+    func lockedDestinationCleanup() async throws {
+        let sourceURL = temporaryURL("locked-source")
+        let destinationURL = temporaryURL("locked-destination")
+        defer { removeDatabase(at: sourceURL); removeDatabase(at: destinationURL) }
+
+        let source = try SQLDatabase(at: sourceURL, journalMode: .wal)
+        try await source.execute("CREATE TABLE payloads (payload BLOB NOT NULL) STRICT")
+        try await source.execute("INSERT INTO payloads VALUES (?)", Data(repeating: 0x3c, count: 2 * 1024 * 1024))
+
+        let openGate = BackupGate()
+        let backup = Task {
+            try await source.backup(to: destinationURL, pagesPerStep: 1,
+                                    afterOpen: { await openGate.pauseOnce() }, afterStep: {})
+        }
+        for _ in 0..<10_000 {
+            if await openGate.reached { break }
+            await Task.yield()
+        }
+        #expect(await openGate.reached)
+
+        let destination = try SQLDatabase(at: destinationURL, canCreate: false, readers: 0)
+        let lockGate = BackupGate()
+        let lock = Task {
+            try await destination.readwrite { _ in await lockGate.pauseOnce() }
+        }
+        for _ in 0..<10_000 {
+            if await lockGate.reached { break }
+            await Task.yield()
+        }
+        #expect(await lockGate.reached)
+
+        await openGate.release()
+        for _ in 0..<100 { await Task.yield() }
+        backup.cancel()
+        await lockGate.release()
+        // The backup is allowed to unlink its incomplete destination before
+        // this deliberately conflicting transaction attempts to commit.
+        _ = try? await lock.value
+        await #expect(throws: CancellationError.self) { try await backup.value }
+        try await destination.close()
+        #expect(!FileManager.default.fileExists(atPath: destinationURL.path))
+
+        let count: Int? = try await source.lookup("SELECT COUNT(*) FROM payloads")
+        #expect(count == 1)
+        try await source.close()
+    }
+
     private func temporaryURL(_ name: String) -> URL {
         FileManager.default.temporaryDirectory
             .appending(path: "minimal-sqlite-\(name)-\(UUID().uuidString).sqlite3")

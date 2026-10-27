@@ -285,6 +285,7 @@ public actor SQLDatabase {
     func backup(
         to destinationURL: URL,
         pagesPerStep: Int32,
+        afterOpen: @escaping @Sendable () async throws -> Void = {},
         afterStep: @escaping @Sendable () async throws -> Void
     ) async throws {
         guard pagesPerStep > 0 else {
@@ -319,6 +320,8 @@ public actor SQLDatabase {
                 sqlite3_close(destination)
                 if !completed { try? FileManager.default.removeItem(at: destinationURL) }
             }
+
+            try await afterOpen()
 
             guard let backup = sqlite3_backup_init(destination, "main", source.handle, "main") else {
                 try throwSQLiteError(code: sqlite3_errcode(destination), handle: destination)
